@@ -4,7 +4,7 @@ import React, { useState, useEffect } from 'react';
 import { useLocation } from 'react-router-dom';
 
 
-const API_URL = 'http://127.0.0.1:5001';
+const API_URL = 'https://your-crm-backend.onrender.com';
 
 function Customers() {
   const [summary, setSummary] = useState({
