@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import axios from 'axios';
 import TodaysFollowUps from '../components/FollowUpsToday';
 
-const API_URL = 'http://127.0.0.1:5001';
+const API_URL = 'https://your-crm-backend.onrender.com';
 
 function FollowUpsPage() {
   const [followUpsToday, setFollowUpsToday] = useState([]);

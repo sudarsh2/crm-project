@@ -3,7 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import axios from 'axios';
 import { useEffect } from 'react';
 
-const API_URL = 'http://127.0.0.1:5001';
+const API_URL = 'https://your-crm-backend.onrender.com';
 
 export default function CustomerDetails() {
   const { id } = useParams();
