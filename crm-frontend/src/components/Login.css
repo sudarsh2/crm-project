@@ -1,0 +1,33 @@
+/* src/components/Login.css */
+.login-body {
+    background: linear-gradient(135deg, #343a40, #212529);
+    color: #fff;
+    height: 100vh;
+  }
+  
+  .login-container {
+    background: #1e1e2f;
+    padding: 2.5rem;
+    border-radius: 15px;
+    box-shadow: 0 0 20px rgba(0, 0, 0, 0.3);
+    width: 100%;
+    max-width: 400px;
+  }
+  
+  .form-control {
+    background-color: #2c2f40;
+    border: none;
+    color: #fff;
+  }
+  
+  .form-control:focus {
+    background-color: #2c2f40;
+    border-color: #0d6efd;
+    color: #fff;
+    box-shadow: 0 0 0 0.2rem rgba(13, 110, 253, 0.25);
+  }
+  
+  .btn-primary {
+    width: 100%;
+  }
+  
