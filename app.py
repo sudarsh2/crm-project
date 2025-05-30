@@ -9,7 +9,7 @@ app = Flask(__name__)
 # CORS Configuration - allow your frontend origin (adjust if needed)
 CORS(
     app,
-    resources={r"/*": {"origins": ["http://localhost:5173","http://localhost:5174"]}},
+    resources={r"/*": {"origins": ["http://localhost:5173", "https://crm-project-1-916c.onrender.com"]}},  # Add deployed frontend too
     supports_credentials=True
 )
 
@@ -26,6 +26,12 @@ def get_db_connection():
 @app.route('/login', methods=['OPTIONS'])
 def handle_options():
     return jsonify(), 200
+
+@app.after_request
+def after_request(response):
+    response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
+    response.headers.add('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,OPTIONS')
+    return response
 
 # Login endpoint
 @app.route('/login', methods=['POST'])

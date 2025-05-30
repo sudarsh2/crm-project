@@ -3,7 +3,7 @@ import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import { useNavigate } from 'react-router-dom';
 
-const API_URL = 'https://your-crm-backend.onrender.com';
+const API_URL = 'https://crm-project-1-916c.onrender.com';
 
 export default function Dashboard() {
   const [leads, setLeads] = useState([]);
