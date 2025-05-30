@@ -45,7 +45,14 @@ useEffect(() => {
 
 const fetchCustomers = async (pageNumber = 1, searchQuery = "") => {
   setLoading(true);
+  setError(null);
   try {
+    const token = localStorage.getItem('token');
+    if (!token) {
+      throw new Error('Authentication token missing');
+    }
+
+   
     const params = {
       page: pageNumber,
       page_size: pageSize,
@@ -61,7 +68,20 @@ const fetchCustomers = async (pageNumber = 1, searchQuery = "") => {
     }
     
 
-    const res = await axios.get(`${API_URL}/api/customers`, { params });
+    const response = await axios.get(`${API_URL}/api/customers`, {
+      params,
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json'
+      },
+      timeout: 10000
+    });
+
+    if (response.data?.status !== 'success') {
+      throw new Error(response.data?.message || 'Invalid response format');
+    }
+
+
     setCustomers(res.data.customers);
     setPage(res.data.page);
     setTotalPages(res.data.total_pages);
@@ -84,15 +104,34 @@ const fetchCustomers = async (pageNumber = 1, searchQuery = "") => {
   };
 
   useEffect(() => {
-    // Fetch summary only once
-    const token = localStorage.getItem('token');
-    const headers = { Authorization: `Bearer ${token}` };
-
-    axios.get(`${API_URL}/api/dashboard_summary`, { headers })
-      .then((res) => setSummary(res.data))
-      .catch(err => console.error("Summary Error:", err));
-
-      fetchUsers(); 
+    const fetchSummary = async () => {
+      try {
+        const token = localStorage.getItem('token');
+        if (!token) {
+          console.error("No token found");
+          return;
+        }
+  
+        const headers = { Authorization: `Bearer ${token}` };
+        
+        const response = await axios.get(`${API_URL}/api/dashboard_summary`, { 
+          headers,
+          timeout: 10000
+        });
+  
+        if (response.data && response.data.status === "success") {
+          setSummary(response.data.data);
+        } else {
+          console.error("Unexpected response format:", response.data);
+        }
+      } catch (err) {
+        console.error("Summary Error:", err);
+        // You might want to set some error state here for UI display
+      }
+    };
+  
+    fetchSummary();
+    fetchUsers(); 
   }, []);
 
   useEffect(() => {

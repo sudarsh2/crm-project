@@ -14,13 +14,19 @@ CORS(
 )
 
 def get_db_connection():
-    conn = psycopg2.connect(
-        host="localhost",
-        database="crm",
-        user="postgres",
-        password="sudarsh@2025"
-    )
-    return conn
+    try:
+        conn = psycopg2.connect(
+            host=os.getenv('DB_HOST', 'localhost'),  # Use environment variable
+            database=os.getenv('DB_NAME', 'crm'),
+            user=os.getenv('DB_USER', 'postgres'),
+            password=os.getenv('DB_PASSWORD', 'sudarsh@2025'),
+            port=os.getenv('DB_PORT', '5432')
+            connect_timeout=5
+        )
+        return conn
+    except psycopg2.Error as e:
+        app.logger.error(f"Database connection error: {e}")
+        raise
 
 # Explicit OPTIONS handler for login (CORS preflight)
 @app.route('/login', methods=['OPTIONS'])
@@ -59,116 +65,181 @@ def login():
             "message": str(e)
         }), 500
 
-@app.route('/api/customers', methods=['GET', 'POST'])
+@app.route('/api/customers', methods=['GET'])
 def handle_customers():
-    if request.method == 'POST':
-        data = request.get_json()
-        name = data['name']
-        phone = data.get('phone')
-        email = data.get('email')
-        company = data.get('company')
-        address = data.get('address')
-        notes = data.get('notes')
-        assigned_to = data.get('assigned_to')
+    """Handle GET requests for customers with pagination and filtering."""
+    conn = None
+    cur = None
+    
+    try:
+        app.logger.info("Starting customers request handling")
+        
+        # Validate and parse parameters
+        page, page_size = validate_pagination_params(request)
+        offset = (page - 1) * page_size
+        filters = request.args.to_dict()
+        app.logger.info(f"Request params: page={page}, size={page_size}, filters={filters}")
 
+        # Connect to database
         conn = get_db_connection()
         cur = conn.cursor()
-        cur.execute('''
-            INSERT INTO customers (name, phone, email, company, address, notes, assigned_to)
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
-            RETURNING id;
-        ''', (name, phone, email, company, address, notes, assigned_to))
-        new_customer = cur.fetchone()
-        conn.commit()
-        cur.close()
-        conn.close()
+        app.logger.info("Database connection established")
+
+        # Build queries
+        base_query = """
+            SELECT 
+                c.id, c.name, c.phone, c.email, c.company,
+                c.address, c.notes, c.assigned_to,
+                (SELECT COUNT(*) FROM follow_ups f WHERE f.customer_id = c.id) AS follow_up_count,
+                (SELECT MAX(f.created_at) FROM follow_ups f WHERE f.customer_id = c.id) AS last_follow_up
+            FROM customers c
+        """
         
+        where_clause, params = build_where_clause(filters)
+        
+        # Execute count query
+        total_count = execute_count_query(conn, cur, where_clause, params)
+        app.logger.info(f"Total customers found: {total_count}")
+
+        # Execute main query
+        customers = execute_customer_query(
+            conn, cur, 
+            base_query + where_clause + " ORDER BY c.name LIMIT %s OFFSET %s",
+            params + [page_size, offset]
+        )
+        app.logger.info(f"Returning {len(customers)} customers")
+
+        return build_success_response(page, page_size, total_count, customers)
+
+    except ValueError as ve:
+        app.logger.warning(f"Validation error: {str(ve)}")
         return jsonify({
-            'status': 'success',
-            'customer_id': new_customer[0]
-        }), 201
+            'status': 'error',
+            'message': str(ve)
+        }), 400
+        
+    except psycopg2.OperationalError as oe:
+        app.logger.error(f"Database operational error: {str(oe)}")
+        return jsonify({
+            'status': 'error',
+            'message': 'Database connection error',
+            'error': str(oe)
+        }), 503
+        
+    except psycopg2.Error as pe:
+        app.logger.error(f"Database error: {str(pe)}")
+        return jsonify({
+            'status': 'error',
+            'message': 'Database operation failed',
+            'error': str(pe)
+        }), 500
+        
+    except Exception as e:
+        app.logger.error(f"Unexpected error: {str(e)}", exc_info=True)
+        return jsonify({
+            'status': 'error',
+            'message': 'Internal server error'
+        }), 500
+        
+    finally:
+        close_db_resources(cur, conn)
 
-    elif request.method == 'GET':
-    # Pagination parameters
-        try:
-            page = int(request.args.get('page', 1))
-            page_size = int(request.args.get('page_size', 10))
-        except ValueError:
-            page = 1
-        page_size = 10
+def validate_pagination_params(request):
+    """Validate and return pagination parameters with safe defaults."""
+    try:
+        page = max(1, int(request.args.get('page', 1)))
+        page_size = min(100, max(1, int(request.args.get('page_size', 10))))
+        return page, page_size
+    except ValueError as ve:
+        app.logger.warning(f"Invalid pagination params: {str(ve)}")
+        raise ValueError("Invalid pagination parameters")
 
-    offset = (page - 1) * page_size
-
-    # Filters
-    followed_up = request.args.get('followed_up')
-    pending = request.args.get('pending')
-    search = request.args.get('search', '').strip()
-
-    conn = get_db_connection()
-    cur = conn.cursor()
-
-    # Dynamic WHERE clause
-    filters = []
+def build_where_clause(filters):
+    """Build SQL WHERE clause and parameters based on filters."""
+    conditions = []
     params = []
+    
+    # Follow-up status filters
+    if filters.get('followed_up') == '1' and filters.get('pending') != '1':
+        conditions.append("EXISTS (SELECT 1 FROM follow_ups f WHERE f.customer_id = c.id)")
+    elif filters.get('pending') == '1' and filters.get('followed_up') != '1':
+        conditions.append("NOT EXISTS (SELECT 1 FROM follow_ups f WHERE f.customer_id = c.id)")
+    
+    # Search filter
+    if filters.get('search'):
+        search = filters['search'].strip().lower()
+        conditions.append("(LOWER(c.name) LIKE %s OR LOWER(c.company) LIKE %s)")
+        params.extend([f"%{search}%", f"%{search}%"])
+    
+    where_clause = f" WHERE {' AND '.join(conditions)}" if conditions else ""
+    return where_clause, params
 
-    if followed_up == '1' and pending != '1':
-        filters.append("EXISTS (SELECT 1 FROM follow_ups f WHERE f.customer_id = c.id)")
-    elif pending == '1' and followed_up != '1':
-        filters.append("NOT EXISTS (SELECT 1 FROM follow_ups f WHERE f.customer_id = c.id)")
+def execute_count_query(conn, cur, where_clause, params):
+    """Execute count query and return total count."""
+    try:
+        count_query = f"SELECT COUNT(*) FROM customers c {where_clause}"
+        app.logger.info(f"Count query: {count_query} with params {params}")
+        
+        cur.execute(count_query, params)
+        return cur.fetchone()[0]
+    except Exception as e:
+        app.logger.error(f"Count query failed: {str(e)}")
+        raise
 
-    if search:
-        filters.append("(LOWER(c.name) LIKE %s OR LOWER(c.company) LIKE %s)")
-        search_term = f"%{search.lower()}%"
-        params.extend([search_term, search_term])
+def execute_customer_query(conn, cur, query, params):
+    """Execute customer query and return formatted results."""
+    try:
+        app.logger.info(f"Main query: {query} with params {params}")
+        
+        cur.execute(query, params)
+        rows = cur.fetchall()
+        
+        customers = []
+        for row in rows:
+            try:
+                customers.append({
+                    'id': row[0],
+                    'name': row[1],
+                    'phone': row[2] or '',
+                    'email': row[3] or '',
+                    'company': row[4] or '',
+                    'address': row[5] or '',
+                    'notes': row[6] or '',
+                    'assigned_to': row[7] or '',
+                    'follow_up_count': row[8] or 0,
+                    'last_follow_up': row[9].strftime('%Y-%m-%d %H:%M') if row[9] else None
+                })
+            except Exception as e:
+                app.logger.error(f"Error processing row: {str(e)}")
+                continue
+                
+        return customers
+    except Exception as e:
+        app.logger.error(f"Customer query failed: {str(e)}")
+        raise
 
-    where_clause = f"WHERE {' AND '.join(filters)}" if filters else ""
-
-    # Count for pagination
-    count_query = f'''
-        SELECT COUNT(*) FROM customers c
-        {where_clause};
-    '''
-    cur.execute(count_query, tuple(params))
-    total_count = cur.fetchone()[0]
-
-    # Fetch paginated customers
-    customer_query = f'''
-        SELECT id, name, phone, email, company, address, notes, assigned_to,
-               (SELECT COUNT(*) FROM follow_ups f WHERE f.customer_id = c.id) AS follow_up_count,
-               (SELECT MAX(f.created_at) FROM follow_ups f WHERE f.customer_id = c.id) AS last_follow_up
-        FROM customers c
-        {where_clause}
-        ORDER BY name
-        LIMIT %s OFFSET %s;
-    '''
-    cur.execute(customer_query, tuple(params + [page_size, offset]))
-
-    rows = cur.fetchall()
-    customers = []
-    for row in rows:
-        customers.append({
-            'id': row[0],
-            'name': row[1],
-            'phone': row[2],
-            'email': row[3],
-            'company': row[4],
-            'address': row[5],
-            'notes': row[6],
-            'assigned_to': row[7],
-            'follow_up_count': row[8],
-            'last_follow_up': row[9].strftime('%Y-%m-%d %H:%M') if row[9] else None
-        })
-
-    cur.close()
-    conn.close()
-
+def build_success_response(page, page_size, total_count, customers):
+    """Build the success response JSON."""
     return jsonify({
+        'status': 'success',
         'page': page,
         'page_size': page_size,
         'total_count': total_count,
-        'total_pages': (total_count + page_size - 1) // page_size,
+        'total_pages': max(1, (total_count + page_size - 1) // page_size),
         'customers': customers
     })
+
+def close_db_resources(cur, conn):
+    """Safely close database resources with logging."""
+    try:
+        if cur:
+            cur.close()
+            app.logger.debug("Cursor closed")
+        if conn:
+            conn.close()
+            app.logger.debug("Database connection closed")
+    except Exception as e:
+        app.logger.error(f"Error closing database resources: {str(e)}")
 
 
 @app.route('/api/random_cold_calls', methods=['GET'])
@@ -227,34 +298,51 @@ def get_random_cold_calls():
 
 @app.route('/api/dashboard_summary', methods=['GET'])
 def dashboard_summary():
-    conn = get_db_connection()
-    cur = conn.cursor()
+    conn = None
+    cur = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
 
-    # Total customers
-    cur.execute('SELECT COUNT(*) FROM customers;')
-    total_customers = cur.fetchone()[0]
+        # Total customers
+        cur.execute('SELECT COUNT(*) FROM customers;')
+        total_customers = cur.fetchone()[0]
 
-    # Followed up customers: customers who have at least one follow-up
-    cur.execute('''
-        SELECT COUNT(DISTINCT customer_id) FROM follow_ups;
-    ''')
-    followed_up = cur.fetchone()[0]
+        # Followed up customers: customers who have at least one follow-up
+        cur.execute('''
+            SELECT COUNT(DISTINCT customer_id) FROM follow_ups;
+        ''')
+        followed_up = cur.fetchone()[0]
 
-    # Pending follow-ups: customers who have NO follow-ups
-    cur.execute('''
-        SELECT COUNT(*) FROM customers
-        WHERE id NOT IN (SELECT DISTINCT customer_id FROM follow_ups);
-    ''')
-    pending_follow_up = cur.fetchone()[0]
+        # Pending follow-ups: customers who have NO follow-ups
+        cur.execute('''
+            SELECT COUNT(*) FROM customers
+            WHERE id NOT IN (SELECT DISTINCT customer_id FROM follow_ups);
+        ''')
+        pending_follow_up = cur.fetchone()[0]
 
-    cur.close()
-    conn.close()
+        return jsonify({
+            "status": "success",
+            "data": {
+                "total_customers": total_customers,
+                "followed_up": followed_up,
+                "pending_follow_up": pending_follow_up
+            }
+        })
 
-    return jsonify({
-        "total_customers": total_customers,
-        "followed_up": followed_up,
-        "pending_follow_up": pending_follow_up
-    })
+    except Exception as e:
+        app.logger.error(f"Error in dashboard_summary: {str(e)}")
+        return jsonify({
+            "status": "error",
+            "message": "Failed to fetch dashboard summary",
+            "error": str(e)
+        }), 500
+        
+    finally:
+        if cur:
+            cur.close()
+        if conn:
+            conn.close()
 
 # Example Flask route
 @app.route('/api/customers/<int:id>', methods=['GET'])
@@ -311,6 +399,8 @@ def get_customer(id):
         'follow_ups': follow_ups
     })
 
+
+
 @app.route('/api/follow_ups_today', methods=['GET'])
 def get_todays_follow_ups():
     conn = get_db_connection()
@@ -360,13 +450,28 @@ ORDER BY f.follow_up_date;
 
 @app.route('/api/users', methods=['GET'])
 def get_users():
-    conn = get_db_connection()
-    cur = conn.cursor()
-    cur.execute('SELECT id, name FROM users')
-    users = [{'id': row[0], 'name': row[1]} for row in cur.fetchall()]
-    cur.close()
-    conn.close()
-    return jsonify({'users': users})
+    conn = None
+    cur = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute('SELECT id, name FROM users')
+        users = [{'id': row[0], 'name': row[1]} for row in cur.fetchall()]
+        return jsonify({'status': 'success', 'users': users})
+    
+    except Exception as e:
+        app.logger.error(f"Error fetching users: {str(e)}")
+        return jsonify({
+            'status': 'error',
+            'message': 'Failed to fetch users',
+            'error': str(e)
+        }), 500
+        
+    finally:
+        if cur:
+            cur.close()
+        if conn:
+            conn.close()
 
 @app.route('/api/current_user', methods=['GET'])
 def get_current_user():
