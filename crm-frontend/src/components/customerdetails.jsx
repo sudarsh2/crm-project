@@ -3,7 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import axios from 'axios';
 import { useEffect } from 'react';
 
-const API_URL = 'https://crm-project-1-916c.onrender.com';
+const API_URL = 'https://crm-project-62br.onrender.com';
 
 export default function CustomerDetails() {
   const { id } = useParams();

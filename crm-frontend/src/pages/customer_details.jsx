@@ -4,7 +4,7 @@ import { useParams, Link } from 'react-router-dom';
 import CustomerDetailsLayout from '../components/CustomerDetailsLayout';
 
 
-const API_URL = 'https://crm-project-1-916c.onrender.com';
+const API_URL = 'https://crm-project-62br.onrender.com';
 
 function CustomerDetails() {
   const { id } = useParams();
