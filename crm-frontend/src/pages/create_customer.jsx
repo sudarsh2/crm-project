@@ -22,7 +22,7 @@ function CreateCustomer() {
       const token = localStorage.getItem('token');
       const headers = { Authorization: `Bearer ${token}` };
 
-      await axios.post('http://127.0.0.1:5001/api/customers', newCustomer, { headers });
+      await axios.post('https://crm-project-62br.onrender.com/api/customers', newCustomer, { headers });
 
       // Redirect to customers list after successful creation
       navigate('/customers');
